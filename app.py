@@ -177,23 +177,36 @@ for _, row in plot_df.iterrows():
 # --- 6️⃣ Display map
 map_output = st_folium(m, width=800, height=600)
 
-# --- 7️⃣ Optional click: detect nearest centroid (lightweight)
-if map_output and "last_clicked" in map_output and map_output["last_clicked"]:
-    lat, lon = map_output["last_clicked"]["lat"], map_output["last_clicked"]["lng"]
+# --- 7️⃣ Detect click on any circle and show details
+clicked_data = None
+
+if map_output:
+    # Different versions use different keys
+    if "last_object_clicked" in map_output and map_output["last_object_clicked"]:
+        clicked_data = map_output["last_object_clicked"]
+    elif "last_clicked" in map_output and map_output["last_clicked"]:
+        clicked_data = map_output["last_clicked"]
+
+if clicked_data:
+    lat, lon = clicked_data["lat"], clicked_data["lng"]
+    # Find closest centroid (lightweight distance)
     dists = ((plot_df.geometry.y - lat)**2 + (plot_df.geometry.x - lon)**2)
     closest_row = plot_df.loc[dists.idxmin()]
     st.success(f"Selected GEOID: {closest_row['GEOID']} (County: {closest_row['County']})")
 
-    # Show top agencies table
+    # --- Display top agencies below map
     try:
         agencies = json.loads(closest_row["Top_Agencies"]) if isinstance(closest_row["Top_Agencies"], str) else closest_row["Top_Agencies"]
         if agencies:
-            st.write("**Top Agencies:**")
+            st.write("**Top Agencies for this tract:**")
             df_ag = pd.DataFrame(agencies)
             df_ag["Agency_Contribution"] = df_ag["Agency_Contribution"].round(3)
             st.dataframe(df_ag, use_container_width=True)
-    except Exception:
-        st.warning("No agency data for this tract.")
+        else:
+            st.warning("No agency data for this tract.")
+    except Exception as e:
+        st.error(f"Error loading agency data: {e}")
+
 
 
 # =========================================================================
