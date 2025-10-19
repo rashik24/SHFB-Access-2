@@ -83,6 +83,7 @@ filtered_df = filtered_df.merge(geo_map_subset[["GEOID", "County_x"]], on="GEOID
 filtered_df.rename(columns={"County_x": "County"}, inplace=True)
 
 # =========================================================================
+# =========================================================================
 # 🌍 CLICKABLE STATIC-STYLE MAP (USING FOLIUM)
 # =========================================================================
 import folium
@@ -92,7 +93,7 @@ import json
 
 st.subheader("🗺️ Access Score Map (Clickable Tracts)")
 
-# --- Keep only relevant GEOIDs and columns
+# --- Prepare Data
 geoids = filtered_df["GEOID"].astype(str).unique()
 plot_df = tracts_gdf[tracts_gdf["GEOID"].isin(geoids)].merge(
     filtered_df[["GEOID", "Access_Score", "County", "Top_Agencies"]],
@@ -101,7 +102,7 @@ plot_df = tracts_gdf[tracts_gdf["GEOID"].isin(geoids)].merge(
 plot_df["Access_Score"] = plot_df["Access_Score"].fillna(0.0)
 plot_df["County"] = plot_df["County"].fillna("Unknown")
 
-# --- Filter only target counties (like before)
+# --- Filter target counties
 target_counties = [
     "Alamance","Alexander","Alleghany","Ashe","Caldwell","Caswell",
     "Davidson","Davie","Forsyth","Guilford","Iredell","Randolph",
@@ -109,73 +110,76 @@ target_counties = [
 ]
 plot_df = plot_df[plot_df["County"].str.title().isin(target_counties)]
 
-# --- Convert to GeoJSON
-tracts_geojson = json.loads(plot_df.to_json())
+# --- CRS check
+if plot_df.crs and plot_df.crs.to_string().lower() != "epsg:4326":
+    plot_df = plot_df.to_crs(epsg=4326)
 
-# --- Create Folium map
-center_lat = plot_df.geometry.centroid.y.mean()
-center_lon = plot_df.geometry.centroid.x.mean()
-m = folium.Map(location=[center_lat, center_lon], zoom_start=7, tiles="cartodbpositron")
-
-# --- Define color scale
-vmin, vmax = plot_df["Access_Score"].min(), plot_df["Access_Score"].max()
-colormap = folium.LinearColormap(
-    colors=["#ffffcc", "#78c679", "#238443"],
-    vmin=vmin,
-    vmax=vmax,
-    caption="Access Score"
-)
-
-# --- Add polygons
-def style_function(feature):
-    score = feature["properties"].get("Access_Score", 0)
-    return {
-        "fillColor": colormap(score),
-        "color": "black",
-        "weight": 0.3,
-        "fillOpacity": 0.7,
-    }
-
-def popup_html(feature):
-    geoid = feature["properties"].get("GEOID", "")
-    county = feature["properties"].get("County", "Unknown")
-    access = round(feature["properties"].get("Access_Score", 0), 3)
-    top_agencies = feature["properties"].get("Top_Agencies", "[]")
+# --- Build popup text inside DataFrame
+def make_popup_html(row):
+    geoid = row["GEOID"]
+    county = row["County"]
+    score = round(row["Access_Score"], 3)
+    agencies = row["Top_Agencies"]
 
     try:
-        agencies = json.loads(top_agencies) if isinstance(top_agencies, str) else top_agencies
-        agencies_html = "".join(
-            f"<li>{a['Name']} — {a['Agency_Contribution']:.3f}</li>" for a in agencies[:3]
+        ag_list = json.loads(agencies) if isinstance(agencies, str) else agencies
+        ag_html = "".join(
+            f"<li>{a['Name']} — {a['Agency_Contribution']:.3f}</li>" for a in ag_list[:3]
         )
     except Exception:
-        agencies_html = "<i>No agency data</i>"
+        ag_html = "<i>No agency data</i>"
 
     return f"""
     <b>GEOID:</b> {geoid}<br>
     <b>County:</b> {county}<br>
-    <b>Access Score:</b> {access}<br>
-    <b>Top Agencies:</b><br>
-    <ul>{agencies_html}</ul>
+    <b>Access Score:</b> {score}<br>
+    <b>Top Agencies:</b><ul>{ag_html}</ul>
     """
+
+plot_df["popup_html"] = plot_df.apply(make_popup_html, axis=1)
+
+# --- Convert to GeoJSON safely
+tracts_geojson = json.loads(plot_df.to_json())
+
+# --- Build folium map
+center_lat = plot_df.geometry.centroid.y.mean()
+center_lon = plot_df.geometry.centroid.x.mean()
+m = folium.Map(location=[center_lat, center_lon], zoom_start=7, tiles="cartodbpositron")
+
+vmin, vmax = plot_df["Access_Score"].min(), plot_df["Access_Score"].max()
+colormap = folium.LinearColormap(
+    colors=["#ffffcc", "#78c679", "#238443"],
+    vmin=vmin, vmax=vmax, caption="Access Score"
+)
 
 geo_layer = folium.GeoJson(
     tracts_geojson,
     name="Access Scores",
-    style_function=style_function,
+    style_function=lambda feature: {
+        "fillColor": colormap(feature["properties"]["Access_Score"]),
+        "color": "black",
+        "weight": 0.3,
+        "fillOpacity": 0.7,
+    },
     tooltip=GeoJsonTooltip(
         fields=["GEOID", "County", "Access_Score"],
         aliases=["GEOID:", "County:", "Access Score:"],
         localize=True,
         sticky=False,
     ),
-    popup=GeoJsonPopup(fields=[], labels=False, parse_html=False, popup=lambda f: popup_html(f)),
+    popup=GeoJsonPopup(
+        fields=["popup_html"],
+        aliases=[""],
+        labels=False,
+        localize=True,
+        parse_html=True,
+    ),
 )
 
 geo_layer.add_to(m)
 colormap.add_to(m)
 
-# --- Show in Streamlit
-map_output = st_folium(m, width=700, height=600)
+map_output = st_folium(m, width=750, height=620)
 
 # =========================================================================
 # 🏢 SHOW CLICKED TRACT’S TOP AGENCIES BELOW
