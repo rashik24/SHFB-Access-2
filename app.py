@@ -85,6 +85,9 @@ filtered_df.rename(columns={"County_x": "County"}, inplace=True)
 # =========================================================================
 # ⚡ PLOTLY CHOROPLETH MAPBOX — ONLY TARGET COUNTIES (SINGLE MAP)
 # =========================================================================
+# =========================================================================
+# ⚡ PLOTLY CHOROPLETH MAPBOX — ONLY TARGET COUNTIES (SINGLE MAP)
+# =========================================================================
 import plotly.express as px
 import plotly.graph_objects as go
 from shapely.geometry import Point
@@ -93,34 +96,42 @@ import json
 
 st.subheader("🗺️ Access Score by Census Tract (Target Counties)")
 
-# --- Target counties (same filter as your static version)
+# --- Target counties
 target_counties = [
     "Alamance","Alexander","Alleghany","Ashe","Caldwell","Caswell",
     "Davidson","Davie","Forsyth","Guilford","Iredell","Randolph",
     "Rockingham","Stokes","Surry","Watauga","Wilkes","Yadkin"
 ]
 
-# --- Filter tracts to target counties only
-tracts_filtered = tracts_gdf.copy()
-tracts_filtered["County_clean"] = (
-    tracts_filtered["County_x"].astype(str)
+# --- Make sure filtered_df has cleaned County names
+filtered_df["County_clean"] = (
+    filtered_df["County"].astype(str)
     .str.strip()
     .str.replace(r"\s*county$", "", case=False, regex=True)
     .str.title()
 )
+
+# --- Merge county info into tracts and filter
+tracts_filtered = tracts_gdf.merge(
+    filtered_df[["GEOID", "County_clean"]],
+    on="GEOID",
+    how="left"
+)
+
 tracts_filtered = tracts_filtered[tracts_filtered["County_clean"].isin(target_counties)]
 
-# --- Ensure CRS = EPSG:4326
+# --- CRS conversion
 if tracts_filtered.crs and tracts_filtered.crs.to_string().lower() != "epsg:4326":
     tracts_filtered = tracts_filtered.to_crs(epsg=4326)
 
-# --- Merge Access_Score and Top_Agencies
+# --- Merge with Access Score & Top Agencies
 plot_df = tracts_filtered.merge(
     filtered_df[["GEOID", "Access_Score", "County", "Top_Agencies"]],
     on="GEOID", how="left"
 )
 plot_df["Access_Score"] = plot_df["Access_Score"].fillna(0.0)
 plot_df["County"] = plot_df["County"].fillna("Unknown")
+
 
 # --- Convert to GeoJSON
 tracts_geojson = json.loads(plot_df.to_json())
