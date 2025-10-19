@@ -83,22 +83,21 @@ filtered_df = filtered_df.merge(geo_map_subset[["GEOID", "County_x"]], on="GEOID
 filtered_df.rename(columns={"County_x": "County"}, inplace=True)
 
 # =========================================================================
-# ⚡ PLOTLY CHOROPLETH MAPBOX — POLYGON GEOIDs (CLICKABLE + WORKING)
+# ⚡ SINGLE PLOTLY CHOROPLETH MAP (CLICKABLE + HIGHLIGHT)
 # =========================================================================
 import plotly.express as px
 import plotly.graph_objects as go
+from shapely.geometry import Point
 from streamlit_plotly_events import plotly_events
 import json
-import geopandas as gpd
-from shapely.geometry import Point
 
-st.subheader("🗺️ Interactive Access Score Map (Tract Polygons)")
+st.subheader("🗺️ Interactive Access Score Map (Tracts)")
 
-# --- Convert CRS if needed (Plotly expects EPSG:4326)
+# --- ensure CRS = EPSG:4326
 if tracts_gdf.crs and tracts_gdf.crs.to_string().lower() != "epsg:4326":
     tracts_gdf = tracts_gdf.to_crs(epsg=4326)
 
-# --- Merge your computed data
+# --- merge data
 plot_df = tracts_gdf.merge(
     filtered_df[["GEOID", "Access_Score", "County", "Top_Agencies"]],
     on="GEOID", how="left"
@@ -106,10 +105,10 @@ plot_df = tracts_gdf.merge(
 plot_df["Access_Score"] = plot_df["Access_Score"].fillna(0.0)
 plot_df["County"] = plot_df["County"].fillna("Unknown")
 
-# --- Create GeoJSON (and ensure GEOID key)
+# --- geojson with explicit GEOID property
 tracts_geojson = json.loads(plot_df.to_json())
 
-# --- Choropleth map
+# --- base choropleth
 fig = px.choropleth_mapbox(
     plot_df,
     geojson=tracts_geojson,
@@ -120,80 +119,74 @@ fig = px.choropleth_mapbox(
     hover_data={"GEOID": True, "County": True, "Access_Score": ':.2f'},
     mapbox_style="carto-positron",
     zoom=6,
-    center={"lat": plot_df.geometry.centroid.y.mean(), "lon": plot_df.geometry.centroid.x.mean()},
+    center={"lat": plot_df.geometry.centroid.y.mean(),
+            "lon": plot_df.geometry.centroid.x.mean()},
     opacity=0.8,
     height=650,
 )
 
 fig.update_layout(
-    margin={"r": 0, "t": 40, "l": 0, "b": 0},
+    margin=dict(r=0, t=40, l=0, b=0),
     coloraxis_colorbar=dict(title="Access Score"),
-    title=f"Access Score — {title_suffix}<br>Urban={urban_sel} min | Rural={rural_sel} min",
+    title=f"Access Score — {title_suffix}<br>Urban={urban_sel} | Rural={rural_sel}",
 )
 
-# --- Display & capture clicks
+# --- capture click and immediately highlight
 selected_points = plotly_events(
-    fig,
-    click_event=True,
-    hover_event=False,
-    override_height=650,
-    key="geo_map_click"
+    fig, click_event=True, hover_event=False, override_height=650, key="geo_click"
 )
 
-st.plotly_chart(fig, use_container_width=True)
-
-# =========================================================================
-# 🏢 SHOW TOP AGENCIES + HIGHLIGHT SELECTED POLYGON
-# =========================================================================
 if selected_points:
-    try:
-        clicked = selected_points[0]
-        lon, lat = clicked["x"], clicked["y"]
-        clicked_point = Point(lon, lat)
+    lon, lat = selected_points[0]["x"], selected_points[0]["y"]
+    clicked_pt = Point(lon, lat)
 
-        # Find which polygon contains the clicked point
-        within_mask = plot_df.geometry.contains(clicked_point)
-        if within_mask.any():
-            clicked_row = plot_df.loc[within_mask].iloc[0]
-        else:
-            # Fallback: nearest centroid if not inside any polygon
-            centroids = plot_df.geometry.centroid
-            clicked_row = plot_df.loc[((centroids.x - lon)**2 + (centroids.y - lat)**2).idxmin()]
+    within_mask = plot_df.geometry.contains(clicked_pt)
+    if within_mask.any():
+        clicked_row = plot_df.loc[within_mask].iloc[0]
+    else:
+        centroids = plot_df.geometry.centroid
+        clicked_row = plot_df.loc[
+            ((centroids.x - lon) ** 2 + (centroids.y - lat) ** 2).idxmin()
+        ]
 
-        geoid_clicked = clicked_row["GEOID"]
-        st.success(f"Selected GEOID: {geoid_clicked} (County: {clicked_row['County']})")
+    geoid_clicked = clicked_row["GEOID"]
+    st.success(f"Selected GEOID: {geoid_clicked} ({clicked_row['County']})")
 
-        # --- Highlight selected tract
-        highlight_layer = go.Choroplethmapbox(
+    # add highlight layer ON THE SAME FIGURE
+    fig.add_trace(
+        go.Choroplethmapbox(
             geojson=tracts_geojson,
             locations=[geoid_clicked],
             featureidkey="properties.GEOID",
             z=[clicked_row["Access_Score"]],
             colorscale=[[0, "red"], [1, "red"]],
             showscale=False,
-            marker_line_width=2.5,
+            marker_line_width=3,
             marker_line_color="red",
             opacity=0.6,
-            name="Selected GEOID"
+            name="Selected",
         )
-        fig.add_trace(highlight_layer)
-        st.plotly_chart(fig, use_container_width=True)
+    )
 
-        # --- Top agencies
+# --- render only once
+st.plotly_chart(fig, use_container_width=True)
+
+# --- show agencies table
+if selected_points:
+    try:
         agencies = json.loads(clicked_row["Top_Agencies"]) if isinstance(
-            clicked_row["Top_Agencies"], str) else clicked_row["Top_Agencies"]
+            clicked_row["Top_Agencies"], str
+        ) else clicked_row["Top_Agencies"]
 
         if agencies:
             df_ag = pd.DataFrame(agencies)
             df_ag["Agency_Contribution"] = df_ag["Agency_Contribution"].round(3)
-            df_ag = df_ag.sort_values("Agency_Contribution", ascending=False)
-            st.write("**Top Agencies for this tract:**")
+            st.write("### 🏢 Top Agencies")
             st.dataframe(df_ag, use_container_width=True)
-            st.bar_chart(df_ag.set_index("Agency_Name")["Agency_Contribution"])
         else:
             st.warning("No agency data for this tract.")
     except Exception as e:
-        st.error(f"Error displaying top agencies: {e}")
+        st.error(f"Error showing agencies: {e}")
 
 # =========================================================================
 # 📊 SUMMARY + TOP/BOTTOM TRACTS
