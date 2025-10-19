@@ -121,169 +121,100 @@ filtered_df.rename(columns={"County_x": "County"}, inplace=True)
 # import folium
 # import json
 # =========================================================================
-# ⚡ ULTRA-FAST INTERACTIVE ACCESS SCORE MAP (CENTROID VERSION)
-# =========================================================================
-from streamlit_folium import st_folium
-import folium
-import json
-from shapely.geometry import Point
-
-st.subheader("🗺️ Fast Interactive Access Score Map")
-
-# --- 1️⃣ Reduce geometry load: precompute centroids
-tracts_centroids = tracts_gdf.copy()
-tracts_centroids["geometry"] = tracts_centroids["geometry"].centroid
-
-# --- 2️⃣ Merge access + agency data
-plot_df = tracts_centroids.merge(
-    filtered_df[["GEOID", "Access_Score", "County", "Top_Agencies"]],
-    on="GEOID", how="left"
-)
-plot_df["Access_Score"] = plot_df["Access_Score"].fillna(0.0)
-plot_df["County"] = plot_df["County"].fillna("Unknown")
-
-# --- 3️⃣ Create folium map
-m = folium.Map(location=[35.6, -79.5], zoom_start=7, tiles="cartodbpositron")
-
-# --- 4️⃣ Normalize colors
-vmin, vmax = plot_df["Access_Score"].min(), plot_df["Access_Score"].max()
-cmap = plt.get_cmap("YlGn")
-norm = plt.Normalize(vmin=vmin, vmax=vmax)
-
-# --- 5️⃣ Add colored centroid circles
-for _, row in plot_df.iterrows():
-    color = mpl.colors.rgb2hex(cmap(norm(row["Access_Score"])))
-    popup_html = f"<b>GEOID:</b> {row['GEOID']}<br><b>County:</b> {row['County']}<br>"
-    try:
-        agencies = json.loads(row["Top_Agencies"]) if isinstance(row["Top_Agencies"], str) else row["Top_Agencies"]
-        if agencies:
-            popup_html += "<b>Top Agencies:</b><ul>"
-            for ag in agencies:
-                popup_html += f"<li>{ag['Name']} ({ag['Agency_Contribution']:.2f})</li>"
-            popup_html += "</ul>"
-    except Exception:
-        popup_html += "<i>No agency data.</i>"
-
-    folium.CircleMarker(
-        location=[row.geometry.y, row.geometry.x],
-        radius=5,
-        color=color,
-        fill=True,
-        fill_color=color,
-        fill_opacity=0.9,
-        popup=folium.Popup(popup_html, max_width=300),
-    ).add_to(m)
-
-# --- 6️⃣ Display map
-map_output = st_folium(m, width=800, height=600)
-
-# --- 7️⃣ Detect click on any circle and show details
-clicked_data = None
-
-if map_output:
-    # Different versions use different keys
-    if "last_object_clicked" in map_output and map_output["last_object_clicked"]:
-        clicked_data = map_output["last_object_clicked"]
-    elif "last_clicked" in map_output and map_output["last_clicked"]:
-        clicked_data = map_output["last_clicked"]
-
-if clicked_data:
-    lat, lon = clicked_data["lat"], clicked_data["lng"]
-    # Find closest centroid (lightweight distance)
-    dists = ((plot_df.geometry.y - lat)**2 + (plot_df.geometry.x - lon)**2)
-    closest_row = plot_df.loc[dists.idxmin()]
-    st.success(f"Selected GEOID: {closest_row['GEOID']} (County: {closest_row['County']})")
-
-    # --- Display top agencies below map
-    try:
-        agencies = json.loads(closest_row["Top_Agencies"]) if isinstance(closest_row["Top_Agencies"], str) else closest_row["Top_Agencies"]
-        if agencies:
-            st.write("**Top Agencies for this tract:**")
-            df_ag = pd.DataFrame(agencies)
-            df_ag["Agency_Contribution"] = df_ag["Agency_Contribution"].round(3)
-            st.dataframe(df_ag, use_container_width=True)
-        else:
-            st.warning("No agency data for this tract.")
-    except Exception as e:
-        st.error(f"Error loading agency data: {e}")
-
-# =========================================================================
-# ⚡ PLOTLY MAPBOX VERSION (FAST + CLICKABLE)
+# ⚡ PLOTLY CHOROPLETH MAPBOX — POLYGON GEOIDs (FAST + CLICKABLE)
 # =========================================================================
 import plotly.express as px
+import plotly.graph_objects as go
 from streamlit_plotly_events import plotly_events
 import json
 
-st.subheader("🗺️ Interactive Access Score Map (Plotly)")
+st.subheader("🗺️ Interactive Access Score Map (Tract Polygons)")
 
-# --- Prepare centroid data (lighter than polygons)
-tracts_centroids = tracts_gdf.copy()
-tracts_centroids["geometry"] = tracts_centroids["geometry"].centroid
+# --- Prepare GeoJSON
+tracts_geojson = json.loads(tracts_gdf.to_json())
 
 # --- Merge access + agency data
-plot_df = tracts_centroids.merge(
+plot_df = tracts_gdf.merge(
     filtered_df[["GEOID", "Access_Score", "County", "Top_Agencies"]],
     on="GEOID", how="left"
 )
 plot_df["Access_Score"] = plot_df["Access_Score"].fillna(0.0)
 plot_df["County"] = plot_df["County"].fillna("Unknown")
 
-# --- Build Plotly scatter map
-fig = px.scatter_mapbox(
+# --- Build choropleth map
+fig = px.choropleth_mapbox(
     plot_df,
-    lat=plot_df.geometry.y,
-    lon=plot_df.geometry.x,
+    geojson=tracts_geojson,
+    locations="GEOID",
     color="Access_Score",
     color_continuous_scale="YlGn",
-    hover_name="County",
-    hover_data={
-        "GEOID": True,
-        "Access_Score": ':.2f',
-        "County": True
-    },
-    zoom=6,
-    height=600,
+    hover_data={"GEOID": True, "County": True, "Access_Score": ':.2f'},
     mapbox_style="carto-positron",
+    zoom=6,
+    center={"lat": 35.5, "lon": -79.5},
+    opacity=0.8,
+    height=650,
 )
 
-# --- Layout polish
 fig.update_layout(
     margin={"r": 0, "t": 40, "l": 0, "b": 0},
     coloraxis_colorbar=dict(title="Access Score"),
     title=f"Access Score — {title_suffix}<br>Urban={urban_sel} min | Rural={rural_sel} min",
 )
 
-# --- Display map and capture clicks
+# --- Capture click event
 selected_points = plotly_events(
     fig,
     click_event=True,
     hover_event=False,
-    override_height=600,
-    key="map_click"
+    override_height=650,
+    key="geo_map_click"
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
 # =========================================================================
-# 🏢 SHOW TOP AGENCIES ON CLICK
+# 🏢 SHOW TOP AGENCIES + HIGHLIGHT SELECTED POLYGON
 # =========================================================================
 if selected_points:
     try:
         clicked = selected_points[0]
-        lat, lon = clicked["y"], clicked["x"]
-        dists = ((plot_df.geometry.y - lat)**2 + (plot_df.geometry.x - lon)**2)
-        closest_row = plot_df.loc[dists.idxmin()]
+        # The click event gives coordinates — find closest GEOID polygon
+        lon, lat = clicked["x"], clicked["y"]
+        plot_df["dist"] = plot_df.geometry.centroid.distance(
+            plot_df.geometry.centroid.iloc[0].__class__(lon, lat)
+        )
+        clicked_row = plot_df.loc[plot_df["dist"].idxmin()]
 
-        st.success(f"Selected GEOID: {closest_row['GEOID']} (County: {closest_row['County']})")
+        geoid_clicked = clicked_row["GEOID"]
+        st.success(f"Selected GEOID: {geoid_clicked} (County: {clicked_row['County']})")
 
-        agencies = json.loads(closest_row["Top_Agencies"]) if isinstance(
-            closest_row["Top_Agencies"], str) else closest_row["Top_Agencies"]
+        # --- Highlight selected GEOID boundary
+        highlight_layer = go.Choroplethmapbox(
+            geojson=tracts_geojson,
+            locations=[geoid_clicked],
+            z=[clicked_row["Access_Score"]],
+            colorscale=[[0, "red"], [1, "red"]],
+            showscale=False,
+            marker_line_width=2.5,
+            marker_line_color="red",
+            opacity=0.8,
+            name="Selected GEOID"
+        )
+        fig.add_trace(highlight_layer)
+        st.plotly_chart(fig, use_container_width=True)
+
+        # --- Display Top Agencies
+        agencies = json.loads(clicked_row["Top_Agencies"]) if isinstance(
+            clicked_row["Top_Agencies"], str) else clicked_row["Top_Agencies"]
 
         if agencies:
             df_ag = pd.DataFrame(agencies)
             df_ag["Agency_Contribution"] = df_ag["Agency_Contribution"].round(3)
+            df_ag = df_ag.sort_values("Agency_Contribution", ascending=False)
             st.write("**Top Agencies for this tract:**")
             st.dataframe(df_ag, use_container_width=True)
+            st.bar_chart(df_ag.set_index("Agency_Name")["Agency_Contribution"])
         else:
             st.warning("No agency data for this tract.")
     except Exception as e:
