@@ -121,7 +121,11 @@ from streamlit_folium import st_folium
 
 # --- Clean county names (from NAMELSADCO)
 tracts_clean = tracts_gdf.copy()
-print(tracts_clean.columns())
+
+
+# Print all column names
+print(list(tracts_clean.columns))
+
 tracts_clean["County_clean"] = (
     tracts_clean["NAMELSADCO"]
     .astype(str)
