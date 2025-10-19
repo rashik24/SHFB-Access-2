@@ -82,58 +82,23 @@ geo_map_subset = geo_map.rename(columns={"GEOID_x": "GEOID"})
 filtered_df = filtered_df.merge(geo_map_subset[["GEOID", "County_x"]], on="GEOID", how="left")
 filtered_df.rename(columns={"County_x": "County"}, inplace=True)
 
-# # =========================================================================
-# # 🖼️ MAP PLOT
-# # =========================================================================
-# geoids = filtered_df["GEOID"].astype(str).unique()
-# plot_df = tracts_gdf[tracts_gdf["GEOID"].isin(geoids)].merge(
-#     filtered_df[["GEOID", "Access_Score", "County"]], on="GEOID", how="left"
-# )
-# plot_df["Access_Score"] = plot_df["Access_Score"].fillna(0.0)
-# plot_df["County"] = plot_df["County"].fillna("Unknown")
-
-# vmin, vmax = 0, float(plot_df["Access_Score"].max())
-# if not np.isfinite(vmax) or vmax <= vmin:
-#     vmax = vmin + 1.0
-
-# norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
-# cmap_obj = plt.get_cmap(cmap_choice)
-
-# fig, ax = plt.subplots(figsize=(8, 8))
-# plot_df.plot(
-#     column="Access_Score",
-#     cmap=cmap_obj,
-#     norm=norm,
-#     linewidth=0,
-#     edgecolor="none",
-#     legend=True,
-#     legend_kwds={"label": "Access Score", "shrink": 0.7},
-#     ax=ax
-# )
-# ax.set_axis_off()
-# ax.set_title(
-#     f"Access Score — {title_suffix}\nUrban={urban_sel} | Rural={rural_sel}",
-#     fontsize=13
-# )
-# st.pyplot(fig)
-
-# from streamlit_folium import st_folium
-# import folium
-# import json
 # =========================================================================
-# ⚡ PLOTLY CHOROPLETH MAPBOX — POLYGON GEOIDs (FAST + CLICKABLE)
+# ⚡ PLOTLY CHOROPLETH MAPBOX — POLYGON GEOIDs (CLICKABLE + WORKING)
 # =========================================================================
 import plotly.express as px
 import plotly.graph_objects as go
 from streamlit_plotly_events import plotly_events
 import json
+import geopandas as gpd
+from shapely.geometry import Point
 
 st.subheader("🗺️ Interactive Access Score Map (Tract Polygons)")
 
-# --- Prepare GeoJSON
-tracts_geojson = json.loads(tracts_gdf.to_json())
+# --- Convert CRS if needed (Plotly expects EPSG:4326)
+if tracts_gdf.crs and tracts_gdf.crs.to_string().lower() != "epsg:4326":
+    tracts_gdf = tracts_gdf.to_crs(epsg=4326)
 
-# --- Merge access + agency data
+# --- Merge your computed data
 plot_df = tracts_gdf.merge(
     filtered_df[["GEOID", "Access_Score", "County", "Top_Agencies"]],
     on="GEOID", how="left"
@@ -141,17 +106,21 @@ plot_df = tracts_gdf.merge(
 plot_df["Access_Score"] = plot_df["Access_Score"].fillna(0.0)
 plot_df["County"] = plot_df["County"].fillna("Unknown")
 
-# --- Build choropleth map
+# --- Create GeoJSON (and ensure GEOID key)
+tracts_geojson = json.loads(plot_df.to_json())
+
+# --- Choropleth map
 fig = px.choropleth_mapbox(
     plot_df,
     geojson=tracts_geojson,
     locations="GEOID",
+    featureidkey="properties.GEOID",
     color="Access_Score",
     color_continuous_scale="YlGn",
     hover_data={"GEOID": True, "County": True, "Access_Score": ':.2f'},
     mapbox_style="carto-positron",
     zoom=6,
-    center={"lat": 35.5, "lon": -79.5},
+    center={"lat": plot_df.geometry.centroid.y.mean(), "lon": plot_df.geometry.centroid.x.mean()},
     opacity=0.8,
     height=650,
 )
@@ -162,7 +131,7 @@ fig.update_layout(
     title=f"Access Score — {title_suffix}<br>Urban={urban_sel} min | Rural={rural_sel} min",
 )
 
-# --- Capture click event
+# --- Display & capture clicks
 selected_points = plotly_events(
     fig,
     click_event=True,
@@ -179,32 +148,38 @@ st.plotly_chart(fig, use_container_width=True)
 if selected_points:
     try:
         clicked = selected_points[0]
-        # The click event gives coordinates — find closest GEOID polygon
         lon, lat = clicked["x"], clicked["y"]
-        plot_df["dist"] = plot_df.geometry.centroid.distance(
-            plot_df.geometry.centroid.iloc[0].__class__(lon, lat)
-        )
-        clicked_row = plot_df.loc[plot_df["dist"].idxmin()]
+        clicked_point = Point(lon, lat)
+
+        # Find which polygon contains the clicked point
+        within_mask = plot_df.geometry.contains(clicked_point)
+        if within_mask.any():
+            clicked_row = plot_df.loc[within_mask].iloc[0]
+        else:
+            # Fallback: nearest centroid if not inside any polygon
+            centroids = plot_df.geometry.centroid
+            clicked_row = plot_df.loc[((centroids.x - lon)**2 + (centroids.y - lat)**2).idxmin()]
 
         geoid_clicked = clicked_row["GEOID"]
         st.success(f"Selected GEOID: {geoid_clicked} (County: {clicked_row['County']})")
 
-        # --- Highlight selected GEOID boundary
+        # --- Highlight selected tract
         highlight_layer = go.Choroplethmapbox(
             geojson=tracts_geojson,
             locations=[geoid_clicked],
+            featureidkey="properties.GEOID",
             z=[clicked_row["Access_Score"]],
             colorscale=[[0, "red"], [1, "red"]],
             showscale=False,
             marker_line_width=2.5,
             marker_line_color="red",
-            opacity=0.8,
+            opacity=0.6,
             name="Selected GEOID"
         )
         fig.add_trace(highlight_layer)
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- Display Top Agencies
+        # --- Top agencies
         agencies = json.loads(clicked_row["Top_Agencies"]) if isinstance(
             clicked_row["Top_Agencies"], str) else clicked_row["Top_Agencies"]
 
@@ -219,7 +194,6 @@ if selected_points:
             st.warning("No agency data for this tract.")
     except Exception as e:
         st.error(f"Error displaying top agencies: {e}")
-
 
 # =========================================================================
 # 📊 SUMMARY + TOP/BOTTOM TRACTS
