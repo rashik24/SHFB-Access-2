@@ -12,22 +12,7 @@ import json
 PRECOMPUTED_FILE = "precomputed_access_scores.parquet"
 TRACT_SHP        = "cb_2023_37_tract_500k.shp"
 GEO_MAP_FILE     = "GeoID RUCA.csv"
-gdf = gpd.read_file(TRACT_SHP)
 
-# === Display columns and sample values ===
-print("📋 Shapefile Columns & Sample Values")
-print("=" * 70)
-for col in gdf.columns:
-    sample_val = gdf[col].iloc[0]
-    print(f"{col:<20} → {sample_val}")
-
-print("\n🌍 CRS:", gdf.crs)
-print("📏 Records:", len(gdf))
-print("📐 Geometry Type(s):", gdf.geom_type.unique())
-
-# Optional: pretty DataFrame preview
-pd.set_option("display.max_columns", None)
-display(gdf.head())
 
 # =========================================================================
 # ⚡ OPTIMIZED LOADERS
