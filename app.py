@@ -113,17 +113,24 @@ st.subheader("🗺️ Access Score Map (Clickable Tracts)")
 # 🌍 PREP TRACTS FOR MAP (All counties, zero-filled)
 # =========================================================================
 
-# 1️⃣ Clean county names in shapefile
 tracts_clean = tracts_gdf.copy()
+
+# --- Identify county column automatically
+possible_county_cols = [c for c in tracts_clean.columns if "county" in c.lower()]
+if not possible_county_cols:
+    raise ValueError("❌ Could not find a county column in the shapefile!")
+county_col = possible_county_cols[0]  # use the first match
+
+# --- Clean county names
 tracts_clean["County_clean"] = (
-    tracts_clean["County_x"]
+    tracts_clean[county_col]
     .astype(str)
     .str.strip()
     .str.replace(r"\s*county$", "", case=False, regex=True)
     .str.title()
 )
 
-# 2️⃣ Filter to your target counties
+# --- Filter to your target counties
 target_counties = [
     "Alamance","Alexander","Alleghany","Ashe","Caldwell","Caswell",
     "Davidson","Davie","Forsyth","Guilford","Iredell","Randolph",
@@ -131,24 +138,21 @@ target_counties = [
 ]
 tracts_filtered = tracts_clean[tracts_clean["County_clean"].isin(target_counties)].copy()
 
-# 3️⃣ Merge with filtered_df (Access Scores + Agencies)
+# --- Merge with your main data
 plot_df = tracts_filtered.merge(
     filtered_df[["GEOID", "Access_Score", "County", "Top_Agencies"]],
     on="GEOID", how="left"
 )
 
-# 4️⃣ Fill blanks → 0 or Unknown
+# --- Fill blanks
 plot_df["Access_Score"] = plot_df["Access_Score"].fillna(0.0)
 plot_df["County"] = plot_df["County"].fillna(plot_df["County_clean"])
 plot_df["Top_Agencies"] = plot_df["Top_Agencies"].fillna("[]")
 
-# Optional CRS correction
+# --- Reproject to WGS84 if needed
 if plot_df.crs and plot_df.crs.to_string().lower() != "epsg:4326":
     plot_df = plot_df.to_crs(epsg=4326)
 
-# --- CRS check
-if plot_df.crs and plot_df.crs.to_string().lower() != "epsg:4326":
-    plot_df = plot_df.to_crs(epsg=4326)
 
 # --- Build popup text inside DataFrame
 def make_popup_html(row):
