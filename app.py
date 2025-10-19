@@ -83,145 +83,116 @@ filtered_df = filtered_df.merge(geo_map_subset[["GEOID", "County_x"]], on="GEOID
 filtered_df.rename(columns={"County_x": "County"}, inplace=True)
 
 # =========================================================================
-# ⚡ PLOTLY CHOROPLETH MAPBOX — ONLY TARGET COUNTIES (SINGLE MAP)
+# 🌍 CLICKABLE STATIC-STYLE MAP (USING FOLIUM)
 # =========================================================================
-# =========================================================================
-# ⚡ PLOTLY CHOROPLETH MAPBOX — ONLY TARGET COUNTIES (SINGLE MAP)
-# =========================================================================
-import plotly.express as px
-import plotly.graph_objects as go
-from shapely.geometry import Point
-from streamlit_plotly_events import plotly_events
+import folium
+from folium.features import GeoJsonTooltip, GeoJsonPopup
+from streamlit_folium import st_folium
 import json
 
-st.subheader("🗺️ Access Score by Census Tract (Target Counties)")
+st.subheader("🗺️ Access Score Map (Clickable Tracts)")
 
-# --- Target counties
-target_counties = [
-    "Alamance","Alexander","Alleghany","Ashe","Caldwell","Caswell",
-    "Davidson","Davie","Forsyth","Guilford","Iredell","Randolph",
-    "Rockingham","Stokes","Surry","Watauga","Wilkes","Yadkin"
-]
-
-# --- Make sure filtered_df has cleaned County names
-filtered_df["County_clean"] = (
-    filtered_df["County"].astype(str)
-    .str.strip()
-    .str.replace(r"\s*county$", "", case=False, regex=True)
-    .str.title()
-)
-
-# --- Merge county info into tracts and filter
-tracts_filtered = tracts_gdf.merge(
-    filtered_df[["GEOID", "County_clean"]],
-    on="GEOID",
-    how="left"
-)
-
-tracts_filtered = tracts_filtered[tracts_filtered["County_clean"].isin(target_counties)]
-
-# --- CRS conversion
-if tracts_filtered.crs and tracts_filtered.crs.to_string().lower() != "epsg:4326":
-    tracts_filtered = tracts_filtered.to_crs(epsg=4326)
-
-# --- Merge with Access Score & Top Agencies
-plot_df = tracts_filtered.merge(
+# --- Keep only relevant GEOIDs and columns
+geoids = filtered_df["GEOID"].astype(str).unique()
+plot_df = tracts_gdf[tracts_gdf["GEOID"].isin(geoids)].merge(
     filtered_df[["GEOID", "Access_Score", "County", "Top_Agencies"]],
     on="GEOID", how="left"
 )
 plot_df["Access_Score"] = plot_df["Access_Score"].fillna(0.0)
 plot_df["County"] = plot_df["County"].fillna("Unknown")
 
+# --- Filter only target counties (like before)
+target_counties = [
+    "Alamance","Alexander","Alleghany","Ashe","Caldwell","Caswell",
+    "Davidson","Davie","Forsyth","Guilford","Iredell","Randolph",
+    "Rockingham","Stokes","Surry","Watauga","Wilkes","Yadkin"
+]
+plot_df = plot_df[plot_df["County"].str.title().isin(target_counties)]
 
 # --- Convert to GeoJSON
 tracts_geojson = json.loads(plot_df.to_json())
 
-# --- Create the base map
-fig = px.choropleth_mapbox(
-    plot_df,
-    geojson=tracts_geojson,
-    locations="GEOID",
-    featureidkey="properties.GEOID",
-    color="Access_Score",
-    color_continuous_scale="YlGn",
-    hover_data={"GEOID": True, "County": True, "Access_Score": ':.2f'},
-    mapbox_style="carto-positron",
-    zoom=6.3,
-    center={"lat": plot_df.geometry.centroid.y.mean(),
-            "lon": plot_df.geometry.centroid.x.mean()},
-    opacity=0.8,
-    height=650,
+# --- Create Folium map
+center_lat = plot_df.geometry.centroid.y.mean()
+center_lon = plot_df.geometry.centroid.x.mean()
+m = folium.Map(location=[center_lat, center_lon], zoom_start=7, tiles="cartodbpositron")
+
+# --- Define color scale
+vmin, vmax = plot_df["Access_Score"].min(), plot_df["Access_Score"].max()
+colormap = folium.LinearColormap(
+    colors=["#ffffcc", "#78c679", "#238443"],
+    vmin=vmin,
+    vmax=vmax,
+    caption="Access Score"
 )
 
-fig.update_layout(
-    margin=dict(r=0, t=40, l=0, b=0),
-    coloraxis_colorbar=dict(title="Access Score"),
-    title=f"Access Score — {title_suffix}<br>Urban={urban_sel} | Rural={rural_sel}",
-)
+# --- Add polygons
+def style_function(feature):
+    score = feature["properties"].get("Access_Score", 0)
+    return {
+        "fillColor": colormap(score),
+        "color": "black",
+        "weight": 0.3,
+        "fillOpacity": 0.7,
+    }
 
-# --- Capture clicks (single map, no duplicate render)
-selected_points = plotly_events(
-    fig,
-    click_event=True,
-    hover_event=False,
-    override_height=650,
-    key="geo_click"
-)
+def popup_html(feature):
+    geoid = feature["properties"].get("GEOID", "")
+    county = feature["properties"].get("County", "Unknown")
+    access = round(feature["properties"].get("Access_Score", 0), 3)
+    top_agencies = feature["properties"].get("Top_Agencies", "[]")
 
-# --- Process click
-if selected_points:
-    lon, lat = selected_points[0]["x"], selected_points[0]["y"]
-    clicked_pt = Point(lon, lat)
-
-    within_mask = plot_df.geometry.contains(clicked_pt)
-    if within_mask.any():
-        clicked_row = plot_df.loc[within_mask].iloc[0]
-    else:
-        centroids = plot_df.geometry.centroid
-        clicked_row = plot_df.loc[
-            ((centroids.x - lon) ** 2 + (centroids.y - lat) ** 2).idxmin()
-        ]
-
-    geoid_clicked = clicked_row["GEOID"]
-    st.success(f"Selected GEOID: {geoid_clicked} ({clicked_row['County']})")
-
-    # --- Add highlight outline
-    fig.add_trace(
-        go.Choroplethmapbox(
-            geojson=tracts_geojson,
-            locations=[geoid_clicked],
-            featureidkey="properties.GEOID",
-            z=[clicked_row["Access_Score"]],
-            colorscale=[[0, "red"], [1, "red"]],
-            showscale=False,
-            marker_line_width=3,
-            marker_line_color="red",
-            opacity=0.7,
-            name="Selected Tract",
-        )
-    )
-
-# --- Render the single map only once
-st.plotly_chart(fig, use_container_width=True)
-
-# =========================================================================
-# 🏢 SHOW TOP AGENCIES BELOW
-# =========================================================================
-if selected_points:
     try:
-        agencies = json.loads(clicked_row["Top_Agencies"]) if isinstance(
-            clicked_row["Top_Agencies"], str
-        ) else clicked_row["Top_Agencies"]
+        agencies = json.loads(top_agencies) if isinstance(top_agencies, str) else top_agencies
+        agencies_html = "".join(
+            f"<li>{a['Name']} — {a['Agency_Contribution']:.3f}</li>" for a in agencies[:3]
+        )
+    except Exception:
+        agencies_html = "<i>No agency data</i>"
 
-        if agencies:
-            df_ag = pd.DataFrame(agencies)
-            df_ag["Agency_Contribution"] = df_ag["Agency_Contribution"].round(3)
-            st.markdown("### 🏢 Top Agencies for Selected Tract")
-            st.dataframe(df_ag, use_container_width=True)
-        else:
-            st.warning("No agency data for this tract.")
-    except Exception as e:
-        st.error(f"Error showing agencies: {e}")
+    return f"""
+    <b>GEOID:</b> {geoid}<br>
+    <b>County:</b> {county}<br>
+    <b>Access Score:</b> {access}<br>
+    <b>Top Agencies:</b><br>
+    <ul>{agencies_html}</ul>
+    """
+
+geo_layer = folium.GeoJson(
+    tracts_geojson,
+    name="Access Scores",
+    style_function=style_function,
+    tooltip=GeoJsonTooltip(
+        fields=["GEOID", "County", "Access_Score"],
+        aliases=["GEOID:", "County:", "Access Score:"],
+        localize=True,
+        sticky=False,
+    ),
+    popup=GeoJsonPopup(fields=[], labels=False, parse_html=False, popup=lambda f: popup_html(f)),
+)
+
+geo_layer.add_to(m)
+colormap.add_to(m)
+
+# --- Show in Streamlit
+map_output = st_folium(m, width=700, height=600)
+
+# =========================================================================
+# 🏢 SHOW CLICKED TRACT’S TOP AGENCIES BELOW
+# =========================================================================
+if map_output and map_output.get("last_active_drawing"):
+    geoid_clicked = map_output["last_active_drawing"]["properties"].get("GEOID")
+    if geoid_clicked:
+        st.success(f"Selected GEOID: {geoid_clicked}")
+        row = filtered_df.loc[filtered_df["GEOID"] == geoid_clicked].head(1)
+        if not row.empty:
+            top_agencies = row["Top_Agencies"].iloc[0]
+            try:
+                agencies = json.loads(top_agencies) if isinstance(top_agencies, str) else top_agencies
+                df_ag = pd.DataFrame(agencies)
+                st.dataframe(df_ag, use_container_width=True)
+            except Exception as e:
+                st.warning(f"Could not parse agencies for this GEOID: {e}")
 
 # =========================================================================
 # 📊 SUMMARY + TOP/BOTTOM TRACTS
