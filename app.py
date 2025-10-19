@@ -110,27 +110,25 @@ st.subheader("🗺️ Access Score Map (Clickable Tracts)")
 # ]
 # plot_df = plot_df[plot_df["County"].str.title().isin(target_counties)]
 # =========================================================================
-# 🌍 PREP TRACTS FOR MAP (All counties, zero-filled)
+# 🌍 CLEAN SHAPEFILE + FILTER TO TARGET COUNTIES
 # =========================================================================
+import json
+import geopandas as gpd
+import folium
+from folium.features import GeoJsonTooltip
+from streamlit_folium import st_folium
 
+# --- Clean county names (from NAMELSADCO)
 tracts_clean = tracts_gdf.copy()
-
-# --- Identify county column automatically
-possible_county_cols = [c for c in tracts_clean.columns if "county" in c.lower()]
-if not possible_county_cols:
-    raise ValueError("❌ Could not find a county column in the shapefile!")
-county_col = possible_county_cols[0]  # use the first match
-
-# --- Clean county names
 tracts_clean["County_clean"] = (
-    tracts_clean[county_col]
+    tracts_clean["NAMELSADCO"]
     .astype(str)
     .str.strip()
     .str.replace(r"\s*county$", "", case=False, regex=True)
     .str.title()
 )
 
-# --- Filter to your target counties
+# --- Filter to your target 17 counties
 target_counties = [
     "Alamance","Alexander","Alleghany","Ashe","Caldwell","Caswell",
     "Davidson","Davie","Forsyth","Guilford","Iredell","Randolph",
@@ -138,7 +136,7 @@ target_counties = [
 ]
 tracts_filtered = tracts_clean[tracts_clean["County_clean"].isin(target_counties)].copy()
 
-# --- Merge with your main data
+# --- Merge shapefile with Access + Agency info
 plot_df = tracts_filtered.merge(
     filtered_df[["GEOID", "Access_Score", "County", "Top_Agencies"]],
     on="GEOID", how="left"
@@ -149,94 +147,85 @@ plot_df["Access_Score"] = plot_df["Access_Score"].fillna(0.0)
 plot_df["County"] = plot_df["County"].fillna(plot_df["County_clean"])
 plot_df["Top_Agencies"] = plot_df["Top_Agencies"].fillna("[]")
 
-# --- Reproject to WGS84 if needed
+# --- CRS sanity check
 if plot_df.crs and plot_df.crs.to_string().lower() != "epsg:4326":
     plot_df = plot_df.to_crs(epsg=4326)
 
+# =========================================================================
+# 🗺️ INTERACTIVE FOLIUM MAP
+# =========================================================================
+st.subheader("🗺️ Interactive Access Score Map (Clickable GEOIDs)")
 
-# --- Build popup text inside DataFrame
-def make_popup_html(row):
-    geoid = row["GEOID"]
-    county = row["County"]
-    score = round(row["Access_Score"], 3)
-    agencies = row["Top_Agencies"]
+# --- Initialize map
+m = folium.Map(location=[36.0, -80.0], zoom_start=7, tiles="cartodb positron")
 
-    try:
-        ag_list = json.loads(agencies) if isinstance(agencies, str) else agencies
-        ag_html = "".join(
-            f"<li>{a['Name']} — {a['Agency_Contribution']:.3f}</li>" for a in ag_list[:3]
-        )
-    except Exception:
-        ag_html = "<i>No agency data</i>"
+# --- Normalize color scale
+vmin, vmax = 0, float(plot_df["Access_Score"].max())
+if not np.isfinite(vmax) or vmax <= vmin:
+    vmax = vmin + 1.0
 
-    return f"""
-    <b>GEOID:</b> {geoid}<br>
-    <b>County:</b> {county}<br>
-    <b>Access Score:</b> {score}<br>
-    <b>Top Agencies:</b><ul>{ag_html}</ul>
-    """
-
-plot_df["popup_html"] = plot_df.apply(make_popup_html, axis=1)
-
-# --- Convert to GeoJSON safely
-tracts_geojson = json.loads(plot_df.to_json())
-
-# --- Build folium map
-center_lat = plot_df.geometry.centroid.y.mean()
-center_lon = plot_df.geometry.centroid.x.mean()
-m = folium.Map(location=[center_lat, center_lon], zoom_start=7, tiles="cartodbpositron")
-
-vmin, vmax = plot_df["Access_Score"].min(), plot_df["Access_Score"].max()
+# --- Color function for access scores
 colormap = folium.LinearColormap(
-    colors=["#ffffcc", "#78c679", "#238443"],
-    vmin=vmin, vmax=vmax, caption="Access Score"
+    colors=["#f7fcb9", "#31a354"],  # light → dark green
+    vmin=vmin, vmax=vmax,
+    caption="Access Score"
 )
 
-geo_layer = folium.GeoJson(
-    tracts_geojson,
-    name="Access Scores",
-    style_function=lambda feature: {
-        "fillColor": colormap(feature["properties"]["Access_Score"]),
-        "color": "black",
-        "weight": 0.3,
+def style_function(feature):
+    score = feature["properties"].get("Access_Score", 0)
+    return {
         "fillOpacity": 0.7,
-    },
+        "weight": 0.3,
+        "color": "gray",
+        "fillColor": colormap(score if score is not None else 0),
+    }
+
+# --- Add polygons
+folium.GeoJson(
+    plot_df,
+    name="Access Score Map",
+    style_function=style_function,
     tooltip=GeoJsonTooltip(
         fields=["GEOID", "County", "Access_Score"],
         aliases=["GEOID:", "County:", "Access Score:"],
-        localize=True,
-        sticky=False,
-    ),
-    popup=GeoJsonPopup(
-        fields=["popup_html"],
-        aliases=[""],
-        labels=False,
-        localize=True,
-        parse_html=True,
-    ),
-)
+        localize=True
+    )
+).add_to(m)
 
-geo_layer.add_to(m)
 colormap.add_to(m)
 
-map_output = st_folium(m, width=750, height=620)
+# --- Display map in Streamlit
+map_output = st_folium(m, width=700, height=600)
 
 # =========================================================================
-# 🏢 SHOW CLICKED TRACT’S TOP AGENCIES BELOW
+# 🏢 SHOW CLICKED GEOID’S TOP AGENCIES
 # =========================================================================
+st.subheader("🏢 Top Agencies for Selected GEOID")
+
 if map_output and map_output.get("last_active_drawing"):
-    geoid_clicked = map_output["last_active_drawing"]["properties"].get("GEOID")
-    if geoid_clicked:
-        st.success(f"Selected GEOID: {geoid_clicked}")
-        row = filtered_df.loc[filtered_df["GEOID"] == geoid_clicked].head(1)
-        if not row.empty:
-            top_agencies = row["Top_Agencies"].iloc[0]
-            try:
-                agencies = json.loads(top_agencies) if isinstance(top_agencies, str) else top_agencies
-                df_ag = pd.DataFrame(agencies)
-                st.dataframe(df_ag, use_container_width=True)
-            except Exception as e:
-                st.warning(f"Could not parse agencies for this GEOID: {e}")
+    try:
+        clicked_geoid = map_output["last_active_drawing"]["properties"].get("GEOID")
+        if clicked_geoid:
+            st.success(f"Selected GEOID: {clicked_geoid}")
+
+            row = plot_df[plot_df["GEOID"] == clicked_geoid]
+            if not row.empty:
+                agencies_raw = row.iloc[0]["Top_Agencies"]
+                agencies = json.loads(agencies_raw) if isinstance(agencies_raw, str) else agencies_raw
+
+                if agencies:
+                    df_ag = pd.DataFrame(agencies)
+                    df_ag["Agency_Contribution"] = df_ag["Agency_Contribution"].round(3)
+                    st.dataframe(df_ag, use_container_width=True)
+                else:
+                    st.warning("No agencies found for this GEOID.")
+            else:
+                st.warning("No matching GEOID in the dataset.")
+    except Exception as e:
+        st.error(f"⚠️ Error reading GEOID click: {e}")
+else:
+    st.info("Click on a tract to view top agencies.")
+
 
 # =========================================================================
 # 📊 SUMMARY + TOP/BOTTOM TRACTS
