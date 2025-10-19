@@ -123,8 +123,15 @@ from streamlit_folium import st_folium
 tracts_clean = tracts_gdf.copy()
 
 
-# Print all column names
-print(list(tracts_clean.columns))
+st.subheader("🧾 Shapefile Columns and Sample Values")
+
+# Show all column names
+st.write("**Column Names:**", list(tracts_clean.columns))
+
+# Optionally show sample values for quick inspection
+for col in tracts_clean.columns:
+    val = tracts_clean[col].iloc[0]
+    st.text(f"{col:<20} → {val}")
 
 tracts_clean["County_clean"] = (
     tracts_clean["NAMELSADCO"]
