@@ -207,6 +207,87 @@ if clicked_data:
     except Exception as e:
         st.error(f"Error loading agency data: {e}")
 
+# =========================================================================
+# ⚡ PLOTLY MAPBOX VERSION (FAST + CLICKABLE)
+# =========================================================================
+import plotly.express as px
+from streamlit_plotly_events import plotly_events
+import json
+
+st.subheader("🗺️ Interactive Access Score Map (Plotly)")
+
+# --- Prepare centroid data (lighter than polygons)
+tracts_centroids = tracts_gdf.copy()
+tracts_centroids["geometry"] = tracts_centroids["geometry"].centroid
+
+# --- Merge access + agency data
+plot_df = tracts_centroids.merge(
+    filtered_df[["GEOID", "Access_Score", "County", "Top_Agencies"]],
+    on="GEOID", how="left"
+)
+plot_df["Access_Score"] = plot_df["Access_Score"].fillna(0.0)
+plot_df["County"] = plot_df["County"].fillna("Unknown")
+
+# --- Build Plotly scatter map
+fig = px.scatter_mapbox(
+    plot_df,
+    lat=plot_df.geometry.y,
+    lon=plot_df.geometry.x,
+    color="Access_Score",
+    color_continuous_scale="YlGn",
+    hover_name="County",
+    hover_data={
+        "GEOID": True,
+        "Access_Score": ':.2f',
+        "County": True
+    },
+    zoom=6,
+    height=600,
+    mapbox_style="carto-positron",
+)
+
+# --- Layout polish
+fig.update_layout(
+    margin={"r": 0, "t": 40, "l": 0, "b": 0},
+    coloraxis_colorbar=dict(title="Access Score"),
+    title=f"Access Score — {title_suffix}<br>Urban={urban_sel} min | Rural={rural_sel} min",
+)
+
+# --- Display map and capture clicks
+selected_points = plotly_events(
+    fig,
+    click_event=True,
+    hover_event=False,
+    override_height=600,
+    key="map_click"
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
+# =========================================================================
+# 🏢 SHOW TOP AGENCIES ON CLICK
+# =========================================================================
+if selected_points:
+    try:
+        clicked = selected_points[0]
+        lat, lon = clicked["y"], clicked["x"]
+        dists = ((plot_df.geometry.y - lat)**2 + (plot_df.geometry.x - lon)**2)
+        closest_row = plot_df.loc[dists.idxmin()]
+
+        st.success(f"Selected GEOID: {closest_row['GEOID']} (County: {closest_row['County']})")
+
+        agencies = json.loads(closest_row["Top_Agencies"]) if isinstance(
+            closest_row["Top_Agencies"], str) else closest_row["Top_Agencies"]
+
+        if agencies:
+            df_ag = pd.DataFrame(agencies)
+            df_ag["Agency_Contribution"] = df_ag["Agency_Contribution"].round(3)
+            st.write("**Top Agencies for this tract:**")
+            st.dataframe(df_ag, use_container_width=True)
+        else:
+            st.warning("No agency data for this tract.")
+    except Exception as e:
+        st.error(f"Error displaying top agencies: {e}")
 
 
 # =========================================================================
