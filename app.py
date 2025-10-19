@@ -83,7 +83,7 @@ filtered_df = filtered_df.merge(geo_map_subset[["GEOID", "County_x"]], on="GEOID
 filtered_df.rename(columns={"County_x": "County"}, inplace=True)
 
 # =========================================================================
-# ⚡ SINGLE PLOTLY CHOROPLETH MAP (CLICKABLE + HIGHLIGHT)
+# ⚡ PLOTLY CHOROPLETH MAPBOX — ONLY TARGET COUNTIES (SINGLE MAP)
 # =========================================================================
 import plotly.express as px
 import plotly.graph_objects as go
@@ -91,24 +91,41 @@ from shapely.geometry import Point
 from streamlit_plotly_events import plotly_events
 import json
 
-st.subheader("🗺️ Interactive Access Score Map (Tracts)")
+st.subheader("🗺️ Access Score by Census Tract (Target Counties)")
 
-# --- ensure CRS = EPSG:4326
-if tracts_gdf.crs and tracts_gdf.crs.to_string().lower() != "epsg:4326":
-    tracts_gdf = tracts_gdf.to_crs(epsg=4326)
+# --- Target counties (same filter as your static version)
+target_counties = [
+    "Alamance","Alexander","Alleghany","Ashe","Caldwell","Caswell",
+    "Davidson","Davie","Forsyth","Guilford","Iredell","Randolph",
+    "Rockingham","Stokes","Surry","Watauga","Wilkes","Yadkin"
+]
 
-# --- merge data
-plot_df = tracts_gdf.merge(
+# --- Filter tracts to target counties only
+tracts_filtered = tracts_gdf.copy()
+tracts_filtered["County_clean"] = (
+    tracts_filtered["County_x"].astype(str)
+    .str.strip()
+    .str.replace(r"\s*county$", "", case=False, regex=True)
+    .str.title()
+)
+tracts_filtered = tracts_filtered[tracts_filtered["County_clean"].isin(target_counties)]
+
+# --- Ensure CRS = EPSG:4326
+if tracts_filtered.crs and tracts_filtered.crs.to_string().lower() != "epsg:4326":
+    tracts_filtered = tracts_filtered.to_crs(epsg=4326)
+
+# --- Merge Access_Score and Top_Agencies
+plot_df = tracts_filtered.merge(
     filtered_df[["GEOID", "Access_Score", "County", "Top_Agencies"]],
     on="GEOID", how="left"
 )
 plot_df["Access_Score"] = plot_df["Access_Score"].fillna(0.0)
 plot_df["County"] = plot_df["County"].fillna("Unknown")
 
-# --- geojson with explicit GEOID property
+# --- Convert to GeoJSON
 tracts_geojson = json.loads(plot_df.to_json())
 
-# --- base choropleth
+# --- Create the base map
 fig = px.choropleth_mapbox(
     plot_df,
     geojson=tracts_geojson,
@@ -118,7 +135,7 @@ fig = px.choropleth_mapbox(
     color_continuous_scale="YlGn",
     hover_data={"GEOID": True, "County": True, "Access_Score": ':.2f'},
     mapbox_style="carto-positron",
-    zoom=6,
+    zoom=6.3,
     center={"lat": plot_df.geometry.centroid.y.mean(),
             "lon": plot_df.geometry.centroid.x.mean()},
     opacity=0.8,
@@ -131,11 +148,16 @@ fig.update_layout(
     title=f"Access Score — {title_suffix}<br>Urban={urban_sel} | Rural={rural_sel}",
 )
 
-# --- capture click and immediately highlight
+# --- Capture clicks (single map, no duplicate render)
 selected_points = plotly_events(
-    fig, click_event=True, hover_event=False, override_height=650, key="geo_click"
+    fig,
+    click_event=True,
+    hover_event=False,
+    override_height=650,
+    key="geo_click"
 )
 
+# --- Process click
 if selected_points:
     lon, lat = selected_points[0]["x"], selected_points[0]["y"]
     clicked_pt = Point(lon, lat)
@@ -152,7 +174,7 @@ if selected_points:
     geoid_clicked = clicked_row["GEOID"]
     st.success(f"Selected GEOID: {geoid_clicked} ({clicked_row['County']})")
 
-    # add highlight layer ON THE SAME FIGURE
+    # --- Add highlight outline
     fig.add_trace(
         go.Choroplethmapbox(
             geojson=tracts_geojson,
@@ -163,15 +185,17 @@ if selected_points:
             showscale=False,
             marker_line_width=3,
             marker_line_color="red",
-            opacity=0.6,
-            name="Selected",
+            opacity=0.7,
+            name="Selected Tract",
         )
     )
 
-# --- render only once
+# --- Render the single map only once
 st.plotly_chart(fig, use_container_width=True)
 
-# --- show agencies table
+# =========================================================================
+# 🏢 SHOW TOP AGENCIES BELOW
+# =========================================================================
 if selected_points:
     try:
         agencies = json.loads(clicked_row["Top_Agencies"]) if isinstance(
@@ -181,7 +205,7 @@ if selected_points:
         if agencies:
             df_ag = pd.DataFrame(agencies)
             df_ag["Agency_Contribution"] = df_ag["Agency_Contribution"].round(3)
-            st.write("### 🏢 Top Agencies")
+            st.markdown("### 🏢 Top Agencies for Selected Tract")
             st.dataframe(df_ag, use_container_width=True)
         else:
             st.warning("No agency data for this tract.")
