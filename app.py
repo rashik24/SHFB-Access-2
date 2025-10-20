@@ -145,7 +145,7 @@ plot_df = tracts_filtered.merge(
 )
 
 # --- Fill blanks
-plot_df["Access_Score"] = plot_df["Access_Score"].fillna(0.0)
+plot_df["Access_Score"] = plot_df["Access_Score"].fillna(0.0).round(2)
 plot_df["County"] = plot_df["County"].fillna(plot_df["County_clean"])
 plot_df["Top_Agencies"] = plot_df["Top_Agencies"].fillna("[]")
 
