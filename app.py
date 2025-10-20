@@ -232,14 +232,26 @@ else:
 # =========================================================================
 # 📊 SUMMARY + TOP/BOTTOM TRACTS
 # =========================================================================
-st.subheader("📊 Summary Statistics")
-summary = filtered_df["Access_Score"].describe().to_frame().T
-st.dataframe(summary)
-
 st.subheader("🏆 Top and Bottom Tracts by Access Score")
-col1, col2 = st.columns(2)
-col1.write("**Top 10 Tracts**")
-col1.dataframe(filtered_df.nlargest(10, "Access_Score")[["GEOID", "County", "Access_Score"]].reset_index(drop=True))
-col2.write("**Bottom 10 Tracts**")
-col2.dataframe(filtered_df.nsmallest(10, "Access_Score")[["GEOID", "County", "Access_Score"]].reset_index(drop=True))
 
+col1, col2 = st.columns(2)
+
+# Top 10 tracts
+col1.write("**Top 10 Tracts**")
+top10 = (
+    filtered_df.nlargest(10, "Access_Score")[["GEOID", "County", "Access_Score"]]
+    .copy()
+    .reset_index(drop=True)
+)
+top10["Access_Score"] = top10["Access_Score"].round(2)
+col1.dataframe(top10)
+
+# Bottom 10 tracts
+col2.write("**Bottom 10 Tracts**")
+bottom10 = (
+    filtered_df.nsmallest(10, "Access_Score")[["GEOID", "County", "Access_Score"]]
+    .copy()
+    .reset_index(drop=True)
+)
+bottom10["Access_Score"] = bottom10["Access_Score"].round(2)
+col2.dataframe(bottom10)
