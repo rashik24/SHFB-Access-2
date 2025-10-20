@@ -217,7 +217,7 @@ if map_output and map_output.get("last_active_drawing"):
 
                 if agencies:
                     df_ag = pd.DataFrame(agencies)
-                    df_ag["Agency_Contribution"] = df_ag["Agency_Contribution"].round(3)
+                    df_ag["Agency_Contribution"] = df_ag["Agency_Contribution"].round(2)
                     st.dataframe(df_ag, use_container_width=True)
                 else:
                     st.warning("No agencies found for this GEOID.")
