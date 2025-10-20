@@ -92,7 +92,7 @@ from folium.features import GeoJsonTooltip, GeoJsonPopup
 from streamlit_folium import st_folium
 import json
 
-st.subheader("🗺️ Access Score Map (Clickable Tracts)")
+#st.subheader("🗺️ Access Score Map (Clickable Tracts)")
 
 # # --- Prepare Data
 # geoids = filtered_df["GEOID"].astype(str).unique()
@@ -156,7 +156,7 @@ if plot_df.crs and plot_df.crs.to_string().lower() != "epsg:4326":
 # =========================================================================
 # 🗺️ INTERACTIVE FOLIUM MAP
 # =========================================================================
-st.subheader("🗺️ Interactive Access Score Map (Clickable GEOIDs)")
+#st.subheader("🗺️ Interactive Access Score Map (Clickable GEOIDs)")
 
 # --- Initialize map
 m = folium.Map(location=[36.0, -80.0], zoom_start=7, tiles="cartodb positron")
