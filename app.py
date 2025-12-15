@@ -98,31 +98,69 @@ parts.append(f"{hour_sel:02d}:00" if hour_sel != "All" else "Avg Hours")
 title_suffix = " | ".join(parts)
 
 
-# =========================================================================
-# 🔍 FILTER THE DATA
-# =========================================================================
+# # =========================================================================
+# # 🔍 FILTER THE DATA
+# # =========================================================================
+# if after_hours:
+#     filtered_df = pre_df[
+#         (pre_df["urban_threshold"] == urban_sel) &
+#         (pre_df["rural_threshold"] == rural_sel) &
+#         (pre_df["week"] == week_sel) &
+#         (pre_df["day"] == day_sel) &
+#         (pre_df["hour"] >= 17)
+#     ].copy()
+#     title_suffix = f"After Hours (≥5PM), Week {week_sel}, {day_sel}"
+# else:
+#     filtered_df = pre_df[
+#         (pre_df["urban_threshold"] == urban_sel) &
+#         (pre_df["rural_threshold"] == rural_sel) &
+#         (pre_df["week"] == week_sel) &
+#         (pre_df["day"] == day_sel) &
+#         (pre_df["hour"] == hour_sel)
+#     ].copy()
+#     title_suffix = f"Week {week_sel}, {day_sel}, {hour_sel:02d}:00"
+
+# if filtered_df.empty:
+#     st.warning("No data available for this combination.")
+#     st.stop()
+
+
+# =======================================================================
+# 📊 AVERAGE OVER UNSELECTED DIMENSIONS (WEEK / DAY / HOUR)
+# =======================================================================
+
+# If after-hours, override the hour logic
 if after_hours:
-    filtered_df = pre_df[
-        (pre_df["urban_threshold"] == urban_sel) &
-        (pre_df["rural_threshold"] == rural_sel) &
-        (pre_df["week"] == week_sel) &
-        (pre_df["day"] == day_sel) &
-        (pre_df["hour"] >= 17)
-    ].copy()
-    title_suffix = f"After Hours (≥5PM), Week {week_sel}, {day_sel}"
-else:
-    filtered_df = pre_df[
-        (pre_df["urban_threshold"] == urban_sel) &
-        (pre_df["rural_threshold"] == rural_sel) &
-        (pre_df["week"] == week_sel) &
-        (pre_df["day"] == day_sel) &
-        (pre_df["hour"] == hour_sel)
-    ].copy()
-    title_suffix = f"Week {week_sel}, {day_sel}, {hour_sel:02d}:00"
+    df = df[df["hour"] >= 17]
+
+# Now average over whatever dimensions were NOT fixed
+filtered_df = (
+    df.groupby("GEOID", as_index=False)
+      .agg({
+          "Access_Score": "mean",
+          "Top_Agencies": "first",  # TODO: you may want union instead of first
+          "County": "first"
+      })
+)
+
+filtered_df["Access_Score"] = filtered_df["Access_Score"].round(2)
 
 if filtered_df.empty:
-    st.warning("No data available for this combination.")
+    st.warning("No data available.")
     st.stop()
+
+# BUILD DYNAMIC TITLE
+parts = []
+parts.append(f"Week {week_sel}" if week_sel != "All" else "Avg Weeks")
+parts.append(day_sel if day_sel != "All" else "Avg Days")
+
+if after_hours:
+    parts.append("After Hours ≥5PM")
+else:
+    parts.append(f"{hour_sel:02d}:00" if hour_sel != "All" else "Avg Hours")
+
+title_suffix = " | ".join(parts)
+
 
 # =========================================================================
 # 🌍 MERGE WITH COUNTY INFO
