@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 import geopandas as gpd
-import matplotlib.pyplot as plt
-import matplotlib as mpl
 import numpy as np
 import json
 
@@ -19,21 +17,20 @@ GEO_MAP_FILE     = "GeoID RUCA.csv"
 # =========================================================================
 @st.cache_resource(show_spinner=False)
 def load_static_geo():
-    """Load static geometry once and cache it."""
     geo_map = pd.read_csv(GEO_MAP_FILE, dtype=str, usecols=["GEOID_x", "County_x"])
     tracts_gdf = gpd.read_file(TRACT_SHP)[["GEOID", "geometry","NAMELSADCO"]]
     return geo_map, tracts_gdf
 
 @st.cache_resource(show_spinner=False)
 def load_scores():
-    """Load precomputed access scores (parquet)."""
     return pd.read_parquet(PRECOMPUTED_FILE)
 
 geo_map, tracts_gdf = load_static_geo()
 pre_df = load_scores()
 
+
 # =========================================================================
-# 🎛️ SIDEBAR FILTERS
+# 🎛️ FILTERS
 # =========================================================================
 st.title("🗺️ SHFB Access Score Dashboard")
 st.sidebar.header("🔧 Filters")
@@ -47,109 +44,48 @@ hour_sel  = st.sidebar.selectbox("Select Hour", ["All"] + list(range(24)))
 
 after_hours = st.sidebar.checkbox("Show After Hours (≥5 PM)", value=False)
 
-# =======================================================================
-# 🎯 FILTER LOGIC
-# =======================================================================
+
+# =========================================================================
+# 🎯 FILTER BASE DATA
+# =========================================================================
 df = pre_df.copy()
 
-# fixed thresholds always apply
 df = df[(df["urban_threshold"] == urban_sel) & (df["rural_threshold"] == rural_sel)]
 
-# dynamic filters
 if week_sel != "All":
     df = df[df["week"] == week_sel]
 
 if day_sel != "All":
     df = df[df["day"] == day_sel]
 
-if not after_hours:
-    if hour_sel != "All":
-        df = df[df["hour"] == hour_sel]
-else:
+if hour_sel != "All" and not after_hours:
+    df = df[df["hour"] == hour_sel]
+
+if after_hours:
     df = df[df["hour"] >= 17]
 
 if df.empty:
     st.warning("No data available.")
     st.stop()
 
-# =======================================================================
+
+# =========================================================================
 # 📊 AVERAGE OVER UNSELECTED DIMENSIONS
-# =======================================================================
+# =========================================================================
 filtered_df = (
     df.groupby("GEOID", as_index=False)
       .agg({
           "Access_Score": "mean",
-          "Top_Agencies": "first",
-          "County": "first"
+          "Top_Agencies": "first"
       })
 )
 
 filtered_df["Access_Score"] = filtered_df["Access_Score"].round(2)
 
-# =======================================================================
-# 🏷️ BUILD TITLE SUFFIX (AUTO-DESCRIBES FIXED VS AVERAGED)
-# =======================================================================
-parts = []
 
-parts.append(f"Week {week_sel}" if week_sel != "All" else "Avg Weeks")
-parts.append(day_sel if day_sel != "All" else "Avg Days")
-parts.append(f"{hour_sel:02d}:00" if hour_sel != "All" else "Avg Hours")
-
-title_suffix = " | ".join(parts)
-
-
-# # =========================================================================
-# # 🔍 FILTER THE DATA
-# # =========================================================================
-# if after_hours:
-#     filtered_df = pre_df[
-#         (pre_df["urban_threshold"] == urban_sel) &
-#         (pre_df["rural_threshold"] == rural_sel) &
-#         (pre_df["week"] == week_sel) &
-#         (pre_df["day"] == day_sel) &
-#         (pre_df["hour"] >= 17)
-#     ].copy()
-#     title_suffix = f"After Hours (≥5PM), Week {week_sel}, {day_sel}"
-# else:
-#     filtered_df = pre_df[
-#         (pre_df["urban_threshold"] == urban_sel) &
-#         (pre_df["rural_threshold"] == rural_sel) &
-#         (pre_df["week"] == week_sel) &
-#         (pre_df["day"] == day_sel) &
-#         (pre_df["hour"] == hour_sel)
-#     ].copy()
-#     title_suffix = f"Week {week_sel}, {day_sel}, {hour_sel:02d}:00"
-
-# if filtered_df.empty:
-#     st.warning("No data available for this combination.")
-#     st.stop()
-
-
-# =======================================================================
-# 📊 AVERAGE OVER UNSELECTED DIMENSIONS (WEEK / DAY / HOUR)
-# =======================================================================
-
-# If after-hours, override the hour logic
-if after_hours:
-    df = df[df["hour"] >= 17]
-
-# Now average over whatever dimensions were NOT fixed
-filtered_df = (
-    df.groupby("GEOID", as_index=False)
-      .agg({
-          "Access_Score": "mean",
-          "Top_Agencies": "first",  # TODO: you may want union instead of first
-          "County": "first"
-      })
-)
-
-filtered_df["Access_Score"] = filtered_df["Access_Score"].round(2)
-
-if filtered_df.empty:
-    st.warning("No data available.")
-    st.stop()
-
-# BUILD DYNAMIC TITLE
+# =========================================================================
+# 🏷️ TITLE SUFFIX
+# =========================================================================
 parts = []
 parts.append(f"Week {week_sel}" if week_sel != "All" else "Avg Weeks")
 parts.append(day_sel if day_sel != "All" else "Avg Days")
@@ -163,51 +99,21 @@ title_suffix = " | ".join(parts)
 
 
 # =========================================================================
-# 🌍 MERGE WITH COUNTY INFO
+# 🌍 MERGE COUNTY INFO
 # =========================================================================
 geo_map_subset = geo_map.rename(columns={"GEOID_x": "GEOID"})
-filtered_df = filtered_df.merge(geo_map_subset[["GEOID", "County_x"]], on="GEOID", how="left")
+filtered_df = filtered_df.merge(
+    geo_map_subset[["GEOID", "County_x"]],
+    on="GEOID",
+    how="left"
+)
 filtered_df.rename(columns={"County_x": "County"}, inplace=True)
 
-# =========================================================================
-# =========================================================================
-# 🌍 CLICKABLE STATIC-STYLE MAP (USING FOLIUM)
-# =========================================================================
-import folium
-from folium.features import GeoJsonTooltip, GeoJsonPopup
-from streamlit_folium import st_folium
-import json
 
-#st.subheader("🗺️ Access Score Map (Clickable Tracts)")
-
-# # --- Prepare Data
-# geoids = filtered_df["GEOID"].astype(str).unique()
-# plot_df = tracts_gdf[tracts_gdf["GEOID"].isin(geoids)].merge(
-#     filtered_df[["GEOID", "Access_Score", "County", "Top_Agencies"]],
-#     on="GEOID", how="left"
-# )
-# plot_df["Access_Score"] = plot_df["Access_Score"].fillna(0.0)
-# plot_df["County"] = plot_df["County"].fillna("Unknown")
-
-# # --- Filter target counties
-# target_counties = [
-#     "Alamance","Alexander","Alleghany","Ashe","Caldwell","Caswell",
-#     "Davidson","Davie","Forsyth","Guilford","Iredell","Randolph",
-#     "Rockingham","Stokes","Surry","Watauga","Wilkes","Yadkin"
-# ]
-# plot_df = plot_df[plot_df["County"].str.title().isin(target_counties)]
 # =========================================================================
-# 🌍 CLEAN SHAPEFILE + FILTER TO TARGET COUNTIES
+# 🌍 SHAPEFILE CLEANING + MERGE
 # =========================================================================
-import json
-import geopandas as gpd
-import folium
-from folium.features import GeoJsonTooltip
-from streamlit_folium import st_folium
-
-# --- Clean county names (from NAMELSADCO)
 tracts_clean = tracts_gdf.copy()
-
 tracts_clean["County_clean"] = (
     tracts_clean["NAMELSADCO"]
     .astype(str)
@@ -216,45 +122,43 @@ tracts_clean["County_clean"] = (
     .str.title()
 )
 
-# --- Filter to your target 17 counties
 target_counties = [
     "Alamance","Alexander","Alleghany","Ashe","Caldwell","Caswell",
     "Davidson","Davie","Forsyth","Guilford","Iredell","Randolph",
     "Rockingham","Stokes","Surry","Watauga","Wilkes","Yadkin"
 ]
+
 tracts_filtered = tracts_clean[tracts_clean["County_clean"].isin(target_counties)].copy()
 
-# --- Merge shapefile with Access + Agency info
 plot_df = tracts_filtered.merge(
     filtered_df[["GEOID", "Access_Score", "County", "Top_Agencies"]],
-    on="GEOID", how="left"
+    on="GEOID",
+    how="left"
 )
 
-# --- Fill blanks
 plot_df["Access_Score"] = plot_df["Access_Score"].fillna(0.0).round(2)
 plot_df["County"] = plot_df["County"].fillna(plot_df["County_clean"])
 plot_df["Top_Agencies"] = plot_df["Top_Agencies"].fillna("[]")
 
-# --- CRS sanity check
 if plot_df.crs and plot_df.crs.to_string().lower() != "epsg:4326":
     plot_df = plot_df.to_crs(epsg=4326)
 
-# =========================================================================
-# 🗺️ INTERACTIVE FOLIUM MAP
-# =========================================================================
-#st.subheader("🗺️ Interactive Access Score Map (Clickable GEOIDs)")
 
-# --- Initialize map
+# =========================================================================
+# 🌍 FOLIUM MAP
+# =========================================================================
+import folium
+from folium.features import GeoJsonTooltip
+from streamlit_folium import st_folium
+
 m = folium.Map(location=[36.0, -80.0], zoom_start=7, tiles="cartodb positron")
 
-# --- Normalize color scale
 vmin, vmax = 0, float(plot_df["Access_Score"].max())
 if not np.isfinite(vmax) or vmax <= vmin:
-    vmax = vmin + 1.0
+    vmax = vmin + 1
 
-# --- Color function for access scores
 colormap = folium.LinearColormap(
-    colors=["#f7fcb9", "#31a354"],  # light → dark green
+    colors=["#f7fcb9", "#31a354"],
     vmin=vmin, vmax=vmax,
     caption="Access Score"
 )
@@ -265,10 +169,9 @@ def style_function(feature):
         "fillOpacity": 0.7,
         "weight": 0.3,
         "color": "gray",
-        "fillColor": colormap(score if score is not None else 0),
+        "fillColor": colormap(score),
     }
 
-# --- Add polygons
 folium.GeoJson(
     plot_df,
     name="Access Score Map",
@@ -282,62 +185,50 @@ folium.GeoJson(
 
 colormap.add_to(m)
 
-# --- Display map in Streamlit
 map_output = st_folium(m, width=700, height=600)
 
+
 # =========================================================================
-# 🏢 SHOW CLICKED GEOID’S TOP AGENCIES
+# 🏢 CLICKED GEOID → AGENCIES
 # =========================================================================
 st.subheader("🏢 Top Agencies for Selected GEOID")
 
 if map_output and map_output.get("last_active_drawing"):
     try:
-        clicked_geoid = map_output["last_active_drawing"]["properties"].get("GEOID")
-        if clicked_geoid:
-            st.success(f"Selected GEOID: {clicked_geoid}")
-
-            row = plot_df[plot_df["GEOID"] == clicked_geoid]
+        geoid = map_output["last_active_drawing"]["properties"].get("GEOID")
+        if geoid:
+            st.success(f"Selected GEOID: {geoid}")
+            row = plot_df[plot_df["GEOID"] == geoid]
             if not row.empty:
-                agencies_raw = row.iloc[0]["Top_Agencies"]
-                agencies = json.loads(agencies_raw) if isinstance(agencies_raw, str) else agencies_raw
+                raw = row.iloc[0]["Top_Agencies"]
+                agencies = json.loads(raw) if isinstance(raw, str) else raw
 
                 if agencies:
                     df_ag = pd.DataFrame(agencies)
                     df_ag["Agency_Contribution"] = df_ag["Agency_Contribution"].round(2)
                     st.dataframe(df_ag, use_container_width=True)
                 else:
-                    st.warning("No agencies found for this GEOID.")
+                    st.warning("No agencies found.")
             else:
-                st.warning("No matching GEOID in the dataset.")
+                st.warning("GEOID not present in dataset.")
     except Exception as e:
-        st.error(f"⚠️ Error reading GEOID click: {e}")
+        st.error(f"Error reading click: {e}")
 else:
-    st.info("Click on a tract to view top agencies.")
+    st.info("Click on a census tract to view agency info.")
 
 
 # =========================================================================
-# 📊 SUMMARY + TOP/BOTTOM TRACTS
+# 📊 TOP / BOTTOM 10
 # =========================================================================
 st.subheader("🏆 Top and Bottom Tracts by Access Score")
 
 col1, col2 = st.columns(2)
 
-# Top 10 tracts
-col1.write("**Top 10 Tracts**")
-top10 = (
-    filtered_df.nlargest(10, "Access_Score")[["GEOID", "County", "Access_Score"]]
-    .copy()
-    .reset_index(drop=True)
-)
-top10["Access_Score"] = top10["Access_Score"].round(2)
-col1.dataframe(top10)
+top10 = filtered_df.nlargest(10, "Access_Score")[["GEOID", "County", "Access_Score"]]
+bottom10 = filtered_df.nsmallest(10, "Access_Score")[["GEOID", "County", "Access_Score"]]
 
-# Bottom 10 tracts
+col1.write("**Top 10 Tracts**")
+col1.dataframe(top10.reset_index(drop=True))
+
 col2.write("**Bottom 10 Tracts**")
-bottom10 = (
-    filtered_df.nsmallest(10, "Access_Score")[["GEOID", "County", "Access_Score"]]
-    .copy()
-    .reset_index(drop=True)
-)
-bottom10["Access_Score"] = bottom10["Access_Score"].round(2)
-col2.dataframe(bottom10)
+col2.dataframe(bottom10.reset_index(drop=True))
