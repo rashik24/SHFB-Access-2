@@ -36,19 +36,67 @@ pre_df = load_scores()
 # 🎛️ SIDEBAR FILTERS
 # =========================================================================
 st.title("🗺️ SHFB Access Score Dashboard")
-
 st.sidebar.header("🔧 Filters")
 
 urban_sel = st.sidebar.selectbox("Urban Threshold (minutes)", sorted(pre_df["urban_threshold"].unique()))
 rural_sel = st.sidebar.selectbox("Rural Threshold (minutes)", sorted(pre_df["rural_threshold"].unique()))
-week_sel  = st.sidebar.selectbox("Select Week", sorted(pre_df["week"].unique()))
-day_sel   = st.sidebar.selectbox("Select Day", sorted(pre_df["day"].unique()))
-hour_sel  = st.sidebar.slider("Select Hour", 0, 23, 10)
+
+week_sel  = st.sidebar.selectbox("Select Week", ["All"] + sorted(pre_df["week"].unique()))
+day_sel   = st.sidebar.selectbox("Select Day", ["All"] + sorted(pre_df["day"].unique()))
+hour_sel  = st.sidebar.selectbox("Select Hour", ["All"] + list(range(24)))
+
 after_hours = st.sidebar.checkbox("Show After Hours (≥5 PM)", value=False)
 
-cmap_choice = st.sidebar.selectbox(
-    "Select Colormap", ["Greens", "YlGn", "BuGn", "YlGnBu", "viridis"]
+# =======================================================================
+# 🎯 FILTER LOGIC
+# =======================================================================
+df = pre_df.copy()
+
+# fixed thresholds always apply
+df = df[(df["urban_threshold"] == urban_sel) & (df["rural_threshold"] == rural_sel)]
+
+# dynamic filters
+if week_sel != "All":
+    df = df[df["week"] == week_sel]
+
+if day_sel != "All":
+    df = df[df["day"] == day_sel]
+
+if not after_hours:
+    if hour_sel != "All":
+        df = df[df["hour"] == hour_sel]
+else:
+    df = df[df["hour"] >= 17]
+
+if df.empty:
+    st.warning("No data available.")
+    st.stop()
+
+# =======================================================================
+# 📊 AVERAGE OVER UNSELECTED DIMENSIONS
+# =======================================================================
+filtered_df = (
+    df.groupby("GEOID", as_index=False)
+      .agg({
+          "Access_Score": "mean",
+          "Top_Agencies": "first",
+          "County": "first"
+      })
 )
+
+filtered_df["Access_Score"] = filtered_df["Access_Score"].round(2)
+
+# =======================================================================
+# 🏷️ BUILD TITLE SUFFIX (AUTO-DESCRIBES FIXED VS AVERAGED)
+# =======================================================================
+parts = []
+
+parts.append(f"Week {week_sel}" if week_sel != "All" else "Avg Weeks")
+parts.append(day_sel if day_sel != "All" else "Avg Days")
+parts.append(f"{hour_sel:02d}:00" if hour_sel != "All" else "Avg Hours")
+
+title_suffix = " | ".join(parts)
+
 
 # =========================================================================
 # 🔍 FILTER THE DATA
