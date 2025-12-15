@@ -44,6 +44,17 @@ day_sel   = st.sidebar.selectbox("Select Day", ["All"] + sorted(pre_df["day"].un
 hour_options = ["All"] + [f"{h % 12 or 12} {'AM' if h < 12 else 'PM'}" for h in range(24)]
 hour_sel = st.sidebar.selectbox("Select Hour", hour_options)
 
+def parse_hour(h_label):
+    """Convert '3 PM' → 15, '12 AM' → 0, etc."""
+    if h_label == "All":
+        return "All"
+    value, period = h_label.split()
+    value = int(value)
+    if period == "AM":
+        return 0 if value == 12 else value
+    else:  # PM
+        return 12 if value == 12 else value + 12
+hour_value = parse_hour(hour_sel)
 
 after_hours = st.sidebar.checkbox("Show After Hours (≥5 PM)", value=False)
 
@@ -61,8 +72,9 @@ if week_sel != "All":
 if day_sel != "All":
     df = df[df["day"] == day_sel]
 
-if hour_sel != "All" and not after_hours:
-    df = df[df["hour"] == hour_sel]
+if hour_value != "All" and not after_hours:
+    df = df[df["hour"] == hour_value]
+
 
 if after_hours:
     df = df[df["hour"] >= 17]
@@ -96,7 +108,8 @@ parts.append(day_sel if day_sel != "All" else "Avg Days")
 if after_hours:
     parts.append("After Hours ≥5PM")
 else:
-    parts.append(f"{hour_sel:02d}:00" if hour_sel != "All" else "Avg Hours")
+    parts.append(hour_sel if hour_sel != "All" else "Avg Hours")
+
 
 title_suffix = " | ".join(parts)
 
