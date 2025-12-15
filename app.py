@@ -40,7 +40,10 @@ rural_sel = st.sidebar.selectbox("Rural Threshold (minutes)", sorted(pre_df["rur
 
 week_sel  = st.sidebar.selectbox("Select Week", ["All"] + sorted(pre_df["week"].unique()))
 day_sel   = st.sidebar.selectbox("Select Day", ["All"] + sorted(pre_df["day"].unique()))
-hour_sel  = st.sidebar.selectbox("Select Hour", ["All"] + list(range(24)))
+# Build AM/PM hour labels
+hour_options = ["All"] + [f"{h % 12 or 12} {'AM' if h < 12 else 'PM'}" for h in range(24)]
+hour_sel = st.sidebar.selectbox("Select Hour", hour_options)
+
 
 after_hours = st.sidebar.checkbox("Show After Hours (≥5 PM)", value=False)
 
