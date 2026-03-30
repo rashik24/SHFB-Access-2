@@ -7,7 +7,7 @@ import json
 # =========================================================================
 # 📂 FILE LOCATIONS
 # =========================================================================
-PRECOMPUTED_FILE = "precomputed_access_scores.parquet"
+PRECOMPUTED_FILE = "precomputed_access_scores_SHFB.parquet"
 TRACT_SHP        = "cb_2023_37_tract_500k.shp"
 GEO_MAP_FILE     = "GeoID RUCA.csv"
 
