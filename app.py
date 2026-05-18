@@ -175,7 +175,7 @@ if not np.isfinite(vmax) or vmax <= vmin:
     vmax = vmin + 1
 
 colormap = folium.LinearColormap(
-    colors=["#f7fcb9", "#31a354"],
+    colors=["#31a354", "#f7fcb9"],
     vmin=vmin, vmax=vmax,
     caption="Access Score"
 )
