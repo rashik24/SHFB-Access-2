@@ -170,25 +170,47 @@ from streamlit_folium import st_folium
 
 m = folium.Map(location=[36.0, -80.0], zoom_start=7, tiles="cartodb positron")
 
-vmin, vmax = 0, float(plot_df["Access_Score"].max())
+# vmin, vmax = 0, float(plot_df["Access_Score"].max())
+# if not np.isfinite(vmax) or vmax <= vmin:
+#     vmax = vmin + 1
+
+# colormap = folium.LinearColormap(
+#     colors=["#31a354", "#f7fcb9"],
+#     vmin=vmin, vmax=vmax,
+#     caption="Access Score"
+# )
+
+# def style_function(feature):
+#     score = feature["properties"].get("Access_Score", 0)
+#     return {
+#         "fillOpacity": 0.7,
+#         "weight": 0.3,
+#         "color": "gray",
+#         "fillColor": colormap(score),
+#     }
+vmin = 0
+vmax = float(plot_df["Access_Score"].quantile(0.95))
+
 if not np.isfinite(vmax) or vmax <= vmin:
     vmax = vmin + 1
 
 colormap = folium.LinearColormap(
-    colors=["#31a354", "#f7fcb9"],
-    vmin=vmin, vmax=vmax,
+    colors=["#f7fcb9", "#addd8e", "#31a354", "#006837"],
+    vmin=vmin,
+    vmax=vmax,
     caption="Access Score"
 )
 
 def style_function(feature):
     score = feature["properties"].get("Access_Score", 0)
+    score = min(score, vmax)
+
     return {
-        "fillOpacity": 0.7,
+        "fillOpacity": 0.75,
         "weight": 0.3,
         "color": "gray",
         "fillColor": colormap(score),
     }
-
 folium.GeoJson(
     plot_df,
     name="Access Score Map",
